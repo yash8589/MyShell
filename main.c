@@ -12,15 +12,26 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <setjmp.h>
 
-// TODO: Spec: 4 ,spec 6, spec 7, spec 8 (whole)
+static jmp_buf env;
+static volatile sig_atomic_t jump_active = 0;
 
-// init_shell() initializes the shell
-// prompt() prints the prompt
-// get_input() takes input from the user
+void sigint_handler(int signo)
+{
+    if (!jump_active)
+    {
+        return;
+    }
+    siglongjmp(env, 42);
+}
 
 int main()
 {
+    // signal(SIGINT, SIG_IGN);
+    signal(SIGINT, sigint_handler);
+
     char *old_dir = init_shell();
     // printf("%s", old_dir);
     char current_dir[1024];
@@ -34,9 +45,18 @@ int main()
     int history_count = 0; // history count of 1 session
     int child_pid = 0;
     int status;
+    char name_child_process[1000][1000];
+    int number_background_processes = 0;
 
     while (1)
     {
+        if (sigsetjmp(env, 1) == 42)
+        {
+            printf("\n");
+        }
+        jump_active = 1;
+        // printf("next iteration...\n");
+        // sleep(2);
 
         int max_args = 0;
         long long argc = 0; // number of arguments
@@ -45,6 +65,8 @@ int main()
         char *input = get_input();
         char *input_copy = (char *)malloc(1000 * sizeof(char));
         strcpy(input_copy, input);
+
+
         // char *input_no_spaces = removeSpacesFromStr(input);
         // long long temp = parse(input_no_spaces, argc, argv);
         long long temp = parse(input, argc, argv);
@@ -55,12 +77,12 @@ int main()
         // {
         //     printf("%s\n", argv[i]);
         // }
-        char name_child_process[10000];
+
         for (int i = 0; i < argc; i++)
         {
             // fgets(buffer, sizeof(buffer), argv[i]);
             // append argv[i] to history file
-            FILE *history_file = fopen("/home/yash/college/third_year/OSN/OSN-Monsoon-2022-/A2/A2/history.txt", "a+");
+            FILE *history_file = fopen("/home/yash/college/third_year/OSN/OSN-Monsoon-2022-/A3/A3/final/history.txt", "a+");
             // add a new line to the history file
 
             fprintf(history_file, "%s", argv[i]);
@@ -69,22 +91,116 @@ int main()
             history_count++;
             fclose(history_file);
 
+            // original fd of stdin and stdout
+            int original_in;
+            dup2(STDIN_FILENO, original_in);
+            int original_out;
+            dup2(STDOUT_FILENO, original_out);
+            // flags for input output redirection
+            int fd; // file descriptor of the file
+            int input_redirection = 0;
+            int input_command_index = 0;
+            int output_redirection = 0;
+            int output_command_index = 0;
+
             // printf("%s\n", argv[i]);
 
             int j = 0;
             char *sep_commands[1000];
-
+            int strlen_command = 0;
+            int in_index_redirect = 0;
+            int out_index_redirect = 0;
             char *command = strtok(argv[i], " ");
             while (command != NULL)
             {
                 sep_commands[j] = command;
-                j++;
-                // printf("%s\n", command);
+                strlen_command = strlen_command + strlen(command);
+                if (strcmp(command, "<") == 0)
+                {
+                    input_redirection = 1;
+                    in_index_redirect = strlen_command;
+                }
+                if (strcmp(command, ">") == 0)
+                {
+                    output_redirection = 1;
+                    out_index_redirect = strlen_command;
+                }
 
+                // printf("%s\n", command);
+                j++;
                 command = strtok(NULL, " ");
             }
             max_args = j;
             j = 0;
+
+            for (int k = 0; k < max_args; k++)
+            {
+                if (strcmp(sep_commands[k], "<") == 0)
+                {
+                    input_redirection = 1;
+                    input_command_index = k + 1; // index of the file in sep_commands
+                    fd = open(sep_commands[k + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    sep_commands[k] = " ";
+                    sep_commands[k + 1] = " ";
+                    // duplicate the open file into stdout, closing stdout atomically
+                    if (dup2(fd, STDIN_FILENO) < 0)
+                    {
+                        perror("Unable to duplicate file descriptor.");
+                        exit(1);
+                    }
+                    // whether or not the original fd is closed, the duplicated fd remains accessible
+                    close(fd);
+                    // argv[i][in_index_redirect] = '\0';
+                }
+                if (strcmp(sep_commands[k], ">") == 0)
+                {
+                    output_redirection = 1;
+                    output_command_index = k + 1; // index of the file in sep_commands
+                    fd = open(sep_commands[k + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    sep_commands[k] = " ";
+                    sep_commands[k + 1] = " ";
+                    // duplicate the open file into stdout, closing stdout atomically
+                    if (dup2(fd, STDOUT_FILENO) < 0)
+                    {
+                        perror("Unable to duplicate file descriptor.");
+                        exit(1);
+                    }
+
+                    // whether or not the original fd is closed, the duplicated fd remains accessible
+                    close(fd);
+                    // argv[i][out_index_redirect] = '\0';
+                    // printf("This will not end up on your screen.\n");
+                }
+            }
+            // char *temp[1000];
+            // int x = 0;
+            // for (int k = 0; k < max_args; k++)
+            // {
+            //     if (strcmp(sep_commands[k], " ") != 0)
+            //     {
+            //         strcpy(temp[x], sep_commands[k]);
+            //         x++;
+            //     }
+            // }
+
+            // for (int k = 0; k < max_args; k++)
+            // {
+            //     sep_commands[k] = NULL;
+            // }
+            // for (int k = 0; k < x; k++)
+            // {
+            //     strcpy(sep_commands[k], temp[k]);
+            // }
+
+            // int max_args_temp = 0;
+            // if (input_command_index > output_command_index)
+            // {
+            //     max_args_temp = output_command_index - 1;
+            // }
+            // else
+            // {
+            //     max_args_temp = input_command_index - 1;
+            // }
 
             if (strcmp(sep_commands[j], "cd") == 0)
             {
@@ -130,19 +246,46 @@ int main()
             }
             else if (strcmp(sep_commands[j], "echo") == 0)
             {
-                // fprintf(history_file, "%s", argv[i]);
-                if (j + 1 < max_args)
+                if (output_redirection == 1 || input_redirection == 1)
                 {
-                    printf("%s\n", sep_commands[j + 1]);
+                    // fprintf(history_file, "%s", argv[i]);
+                    while (j + 1 < output_command_index - 1)
+                    {
+                        if (j + 1 < max_args)
+                        {
+                            printf("%s ", sep_commands[j + 1]);
+                        }
+                        else
+                        {
+                            perror("Error: No string specified");
+                        }
+                        j++;
+                    }
+                    printf("\n");
+                }
+                else if (output_redirection == 0 && input_redirection == 0)
+                {
+
+                    while (j + 1 < max_args)
+                    {
+                        if (j + 1 < max_args)
+                        {
+                            printf("%s ", sep_commands[j + 1]);
+                        }
+                        else
+                        {
+                            perror("Error: No string specified");
+                        }
+                        j++;
+                    }
+                    printf("\n");
                 }
                 else
                 {
-                    perror("Error: No string specified");
+                    perror("Error: No file specified");
                 }
             }
-            // implement ls, ls -l, ls -a without using execvp
 
-            // TODO:  ls <filename>
             else if (strcmp(sep_commands[j], "ls") == 0)
             {
                 // fprintf(history_file, "%s", argv[i]);
@@ -203,7 +346,6 @@ int main()
 
             // implement the pinfo command
 
-            // TODO: +/- for foreground processes and background processes
             else if (strcmp(sep_commands[j], "pinfo") == 0)
             {
                 char *lastchar = argv[i] + strlen(argv[i]) - 1;
@@ -222,7 +364,6 @@ int main()
 
             // Create a custom discover command which emulates the basics of the find command. The command should search for files in a directory hierarchy.
 
-            // TODO: discover -d -f
 
             else if (strcmp(sep_commands[j], "discover") == 0)
             {
@@ -283,6 +424,10 @@ int main()
             {
                 _history();
             }
+            else if (strcmp(sep_commands[j], "exit") == 0)
+            {
+                exit(0);
+            }
             else
             {
                 char *lastchar = input_copy + strlen(input_copy) - 2;
@@ -300,7 +445,8 @@ int main()
                     char temp[10000];
                     strcpy(temp, input_copy);
                     char *token = strtok(temp, " &\n\t\r");
-                    strcpy(name_child_process, token);
+                    strcpy(name_child_process[number_background_processes], token);
+                    number_background_processes++;
                     child_pid = _background(input_copy, old_dir);
                     printCyan();
                     printf("PID: %d\n", child_pid);
@@ -325,6 +471,8 @@ int main()
                 }
                 // perror("Error: No such command");
             }
+            dup2(original_in, STDIN_FILENO);
+            dup2(original_out, STDOUT_FILENO);
         }
         if (child_pid == 0)
         {
@@ -332,18 +480,19 @@ int main()
         }
         else
         {
+
             if (waitpid(child_pid, &status, WNOHANG) > 0)
             {
                 if (WEXITSTATUS(status))
                 {
                     printCyan();
-                    printf("%s process with PID %d exited abnormally\n", name_child_process, child_pid);
+                    printf("%s process with PID %d exited abnormally\n", name_child_process[number_background_processes], child_pid);
                     resetColor();
                 }
                 else
                 {
                     printGreen();
-                    printf("%s process with PID %d exited normally\n", name_child_process, child_pid);
+                    printf("%s process with PID %d exited normally\n", name_child_process[number_background_processes], child_pid);
                     resetColor();
                 }
                 // printf("Process with pid %d exited\n", child_pid);
@@ -354,5 +503,12 @@ int main()
                 continue;
             }
         }
+
+        // on pressing ctrl + c interrupt any currently running foreground job, by sending it the SIGINT signal. This should have no effect on the shell if there is no foreground process running.
+
+        // implement the above ctrl + c process by using the SIGINT signal
+
+        // on pressing ctrl + z, push the foreground  job to backgroung and change its status to stopped. This should have no effect on the shell if there is no foreground process running.
+        // on pressing ctrl + d, exit the shell
     }
 }
